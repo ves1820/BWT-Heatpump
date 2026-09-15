@@ -1,4 +1,4 @@
-# 🏊‍♂️ BWT / Fairland Pool-Wärmepumpen Modbus Controller & Sniffer (ESP32-C3)
+# BWT / Fairland Pool-Wärmepumpen Modbus Controller & Sniffer (ESP32-C3)
 
 Dieses Projekt ermöglicht das Auslesen und Steuern von **BWT** sowie **Fairland Inverter-Poolwärmepumpen** über die interne RS485 / Modbus RTU-Schnittstelle mittels eines **ESP32-C3**.
 
@@ -8,7 +8,7 @@ Das System bietet zwei Betriebsmodi:
 
 ---
 
-## 📑 Inhaltsverzeichnis
+## Inhaltsverzeichnis
 - [Features](#-features)
 - [Hardware & Verkabelung](#-hardware--verkabelung)
 - [Modbus Register-Dokumentation](#-modbus-register-dokumentation)
@@ -18,7 +18,7 @@ Das System bietet zwei Betriebsmodi:
 
 ---
 
-## ✨ Features
+## Features
 
 * **Duales System:** Umschaltung zwischen passivem Sniffer und aktivem Master per Web-Button.
 * **Erweiterter Delta-Filter:** Protokolliert im Sniffer-Modus gezielt Werteänderungen, um neue Modbus-Register schnell zu identifizieren.
@@ -29,7 +29,7 @@ Das System bietet zwei Betriebsmodi:
 
 ---
 
-## 🔌 Hardware & Verkabelung
+## Hardware & Verkabelung
 
 ### Benötigte Komponenten
 * **Microcontroller:** ESP32-C3 (z. B. SuperMini oder DevModule)
@@ -53,13 +53,13 @@ Das System bietet zwei Betriebsmodi:
 
 ---
 
-## 📊 Modbus Register-Dokumentation
+## Modbus Register-Dokumentation
 
 ### 1. Steuerung & Betriebsmodus (FC 0x03 Lesen / FC 0x10 Schreiben)
 
 | Hex | Dez | Skalierung / Typ | Einheit | Beschreibung & Werte |
 | :--- | :--- | :--- | :--- | :--- |
-| **`0x03E8`** | **1000** | uint16 | Enum | **Betriebsmodus / Power**<br>• `0` = AUS (Standby)<br>• `18` (`0x12`) = **SMART**<br>• `23` (`0x17`) = **ECO / BOOST** |
+| **`0x03E8`** | **1000** | uint16 | Enum | **Betriebsmodus / Power**<br>• `0` = AUS (Standby)<br>• `1` = EIN <br>• `21` (`0x15`) = **ECO**<br>• `23` (`0x17`) = **SMART**<br>• `22` (`0x16`) = **BOOST** |
 | **`0x03E9`** | **1001** | Wert / 10.0 | °C | **Soll-Temperatur (Set Point)**<br>• z. B. `320` = **32,0 °C** (Einstellbereich: 15.0 – 35.0 °C) |
 
 ---
@@ -90,7 +90,7 @@ Das System bietet zwei Betriebsmodi:
 
 ---
 
-## 💻 Software & Abhängigkeiten
+## Software & Abhängigkeiten
 
 ### Benötigte Arduino-Bibliotheken
 Installiere folgende Bibliotheken über den **Arduino Library Manager**:
@@ -101,7 +101,7 @@ Installiere folgende Bibliotheken über den **Arduino Library Manager**:
 
 ---
 
-## 🚀 Inbetriebnahme & Flashen
+## Inbetriebnahme & Flashen
 
 ### 1. Erstes Flashen via USB
 1. Verbinde den ESP32-C3 per USB mit deinem Mac/PC.
