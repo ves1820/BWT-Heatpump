@@ -2,10 +2,19 @@
 #include <WebServer.h>
 #include <ModbusMaster.h>
 #include <ArduinoOTA.h>
+#include <PubSubClient.h>
 
 // --- WLAN Konfiguration ---
 const char* ssid = "DEIN_WLAN_NAME";
 const char* password = "DEIN_WLAN_PASSWORT";
+
+// --- MQTT Konfiguration ---
+const char* mqtt_server = "192.168.1.100";  // IP deines MQTT-Brokers
+const int   mqtt_port   = 1883;
+const char* mqtt_user   = "";               // Optional (sonst leer lassen)
+const char* mqtt_pass   = "";               // Optional (sonst leer lassen)
+const char* mqtt_prefix = "heatpump";       // Topic-Präfix
+const char* mqtt_client_id = "BWT_HeatPump"; // Feste MQTT Client-ID
 
 // --- Hardware Pins (ESP32-C3) ---
 #define RX_PIN 2
@@ -19,6 +28,9 @@ enum HeatPumpMode {
     MODE_BOOST = 22,
     MODE_ECO   = 23
 };
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 WebServer server(80);
 ModbusMaster node;
@@ -158,7 +170,69 @@ void flushModbus() {
   while(ModbusSerial.available()) ModbusSerial.read();
 }
 
-// Map Sensor Data & Store into dynamic cache
+// --- MQTT Hilfsfunktionen ---
+void sendMQTT(const String& subtopic, const String& payload) {
+  if (mqttClient.connected()) {
+    String fullTopic = String(mqtt_prefix) + "/" + subtopic;
+    mqttClient.publish(fullTopic.c_str(), payload.c_str(), true);
+  }
+}
+
+void publishAllMQTT() {
+  if (!mqttClient.connected()) return;
+  
+  // LWT & System-Informationen
+  sendMQTT("status", "online");
+  sendMQTT("ip", WiFi.localIP().toString());
+
+  // Power Status (ON / OFF)
+  sendMQTT("power", (pwp.raw_mode == MODE_OFF) ? "OFF" : "ON");
+  
+  // Modus Klartext & Modus Wert
+  String modeStr = "UNKNOWN";
+  if (pwp.raw_mode == MODE_OFF) modeStr = "OFF";
+  else if (pwp.raw_mode == MODE_ON) modeStr = "ON";
+  else if (pwp.raw_mode == MODE_SMART) modeStr = "SMART";
+  else if (pwp.raw_mode == MODE_BOOST) modeStr = "BOOST";
+  else if (pwp.raw_mode == MODE_ECO) modeStr = "ECO";
+  
+  sendMQTT("mode", modeStr);
+  sendMQTT("mode_raw", String(pwp.raw_mode));
+
+  // Temperaturen (inkl. Sollwert)
+  sendMQTT("target_temp", String(pwp.target_temp, 1));
+  sendMQTT("water_in_temp", String(pwp.water_in_temp, 1));
+  sendMQTT("water_out_temp", String(pwp.water_out_temp, 1));
+  sendMQTT("outdoor_temp", String(pwp.outdoor_temp, 1));
+}
+
+void reconnectMQTT() {
+  static unsigned long lastMQTTAttempt = 0;
+  if (!mqttClient.connected()) {
+    unsigned long now = millis();
+    if (now - lastMQTTAttempt > 5000) {
+      lastMQTTAttempt = now;
+      bool connected = false;
+      
+      String lwtTopic = String(mqtt_prefix) + "/status";
+
+      if (strlen(mqtt_user) > 0) {
+        connected = mqttClient.connect(mqtt_client_id, mqtt_user, mqtt_pass, lwtTopic.c_str(), 1, true, "offline");
+      } else {
+        connected = mqttClient.connect(mqtt_client_id, lwtTopic.c_str(), 1, true, "offline");
+      }
+
+      if (connected) {
+        addLog("✅ MQTT Verbunden als '" + String(mqtt_client_id) + "' mit Broker: " + String(mqtt_server));
+        publishAllMQTT();
+      } else {
+        addLog("❌ MQTT Verbindung fehlgeschlagen. Status=" + String(mqttClient.state()));
+      }
+    }
+  }
+}
+
+// Map Sensor Data, Store into dynamic cache & publish to MQTT on Change
 void updateCacheAndPwp(uint16_t addr, uint16_t val, bool &isChanged) {
   isChanged = false;
   int foundIdx = -1;
@@ -179,16 +253,43 @@ void updateCacheAndPwp(uint16_t addr, uint16_t val, bool &isChanged) {
   }
 
   switch(addr) {
-    case 0x0200: pwp.water_in_temp = (int16_t)val / 10.0; break;
-    case 0x0201: pwp.water_out_temp = (int16_t)val / 10.0; break;
-    case 0x0203: pwp.outdoor_temp = (int16_t)val / 10.0; break;
+    case 0x0200: 
+      pwp.water_in_temp = (int16_t)val / 10.0;
+      if (isChanged) sendMQTT("water_in_temp", String(pwp.water_in_temp, 1));
+      break;
+    case 0x0201: 
+      pwp.water_out_temp = (int16_t)val / 10.0;
+      if (isChanged) sendMQTT("water_out_temp", String(pwp.water_out_temp, 1));
+      break;
+    case 0x0203: 
+      pwp.outdoor_temp = (int16_t)val / 10.0;
+      if (isChanged) sendMQTT("outdoor_temp", String(pwp.outdoor_temp, 1));
+      break;
     case 0x01FE: pwp.compressor_freq = val / 10.0; break;
     case 0x0209: pwp.suction_temp = (int16_t)val / 10.0; break;
     case 0x020A: pwp.evap_temp = (int16_t)val / 10.0; break;
     case 0x0044: pwp.hotgas_temp = (int16_t)val / 10.0; break;
     case 0x01FB: pwp.status_code = val; break;
-    case 0x03E8: pwp.raw_mode = val; break;
-    case 0x03E9: pwp.target_temp = (int16_t)val / 10.0; break;
+    case 0x03E8: {
+      pwp.raw_mode = val;
+      if (isChanged) {
+        sendMQTT("power", (pwp.raw_mode == MODE_OFF) ? "OFF" : "ON");
+        sendMQTT("mode_raw", String(pwp.raw_mode));
+        
+        String modeStr = "UNKNOWN";
+        if (pwp.raw_mode == MODE_OFF) modeStr = "OFF";
+        else if (pwp.raw_mode == MODE_ON) modeStr = "ON";
+        else if (pwp.raw_mode == MODE_SMART) modeStr = "SMART";
+        else if (pwp.raw_mode == MODE_BOOST) modeStr = "BOOST";
+        else if (pwp.raw_mode == MODE_ECO) modeStr = "ECO";
+        sendMQTT("mode", modeStr);
+      }
+      break;
+    }
+    case 0x03E9: 
+      pwp.target_temp = (int16_t)val / 10.0;
+      if (isChanged) sendMQTT("target_temp", String(pwp.target_temp, 1));
+      break;
   }
 }
 
@@ -277,7 +378,7 @@ void handleSniffer() {
   }
 }
 
-// --- Active Master Logik (Abfrage einzelner Register wie das Tuya Modul) ---
+// --- Active Master Logik ---
 bool readSingleRegisterActive(uint16_t regAddr) {
   flushModbus();
   delay(30);
@@ -295,20 +396,7 @@ bool readSingleRegisterActive(uint16_t regAddr) {
 
 void updateActiveData() {
   const uint16_t regsToPoll[] = {
-    0x0200, // Vorlauf
-    0x0201, // Rücklauf
-    0x0203, // Außentemp
-    0x03E8, // Modus
-    0x03E9, // Soll-Temp
-    0x01FE, // Kompressor Frequenz
-    0x0209, // Saugrohr
-    0x020A, // Verdampfer
-    0x0044, // Heißgas
-    0x01FB, // Status-Code
-    0x01F4, // Lüfter / Status
-    0x01F5, // Status
-    0x01F7, // Status
-    0x003B  // Verdichter Status
+    0x0200, 0x0201, 0x0203, 0x03E8, 0x03E9, 0x01FE, 0x0209, 0x020A, 0x0044, 0x01FB
   };
 
   int successCount = 0;
@@ -362,6 +450,14 @@ void handleRoot() {
     return;
   }
 
+  if (server.hasArg("reboot")) {
+    addLog(">>> ESP32 NEUSTART WIRD AUSGEFÜHRT <<<");
+    server.send(200, "text/html", "<html><head><meta charset='utf-8'></head><body style='font-family:sans-serif; text-align:center; padding-top:50px;'><h3>ESP32 wird neu gestartet...</h3><p>Automatische Weiterleitung in 8 Sekunden.</p><script>setTimeout(function(){ window.location.href='/'; }, 8000);</script></body></html>");
+    delay(1000);
+    ESP.restart();
+    return;
+  }
+
   if (!isSnifferMode) {
     if (server.hasArg("setMode")) {
       uint16_t newMode = server.arg("setMode").toInt();
@@ -401,10 +497,12 @@ void handleRoot() {
     html += "<span style='color:blue; font-weight:bold;'>SNIFFER (Passiv)</span></p>";
     html += "<p><a href='/?mode=active'><button style='padding:8px; background:#d9534f; color:white;'>Wechsel zu ACTIVE MASTER</button></a> ";
     html += "<a href='/?toggleDelta=1'><button style='padding:8px;'>" + String(deltaOnlyMode ? "Zeige ALLE Pakete" : "NUR Änderungen (Delta)") + "</button></a> ";
-    html += "<a href='/?clearCache=1'><button style='padding:8px; background:#f0ad4e; color:white;'>Reset Cache</button></a></p><hr>";
+    html += "<a href='/?clearCache=1'><button style='padding:8px; background:#f0ad4e; color:white;'>Reset Cache</button></a> ";
+    html += "<a href='/?reboot=1' onclick='return confirm(\"ESP32 wirklich neu starten?\");'><button style='padding:8px; background:#d9534f; color:white;'>Reboot</button></a></p><hr>";
   } else {
     html += "<span style='color:red; font-weight:bold;'>ACTIVE MASTER (Steuerung)</span></p>";
-    html += "<p><a href='/?mode=sniffer'><button style='padding:8px; background:#0275d8; color:white;'>Wechsel zu SNIFFER</button></a></p><hr>";
+    html += "<p><a href='/?mode=sniffer'><button style='padding:8px; background:#0275d8; color:white;'>Wechsel zu SNIFFER</button></a> ";
+    html += "<a href='/?reboot=1' onclick='return confirm(\"ESP32 wirklich neu starten?\");'><button style='padding:8px; background:#d9534f; color:white;'>Reboot</button></a></p><hr>";
     
     html += "<h3>Steuerung (Write via FC10)</h3>";
     html += "<p><b>Aktueller Modus (Reg 0x03E8):</b> " + decodeRegValue(0x03E8, pwp.raw_mode) + "</p>";
@@ -457,6 +555,8 @@ void setup() {
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) { delay(500); }
   
+  mqttClient.setServer(mqtt_server, mqtt_port);
+
   ArduinoOTA.setHostname("bwt-heatpump-esp32");
   ArduinoOTA.setPassword("11111111");
   ArduinoOTA.begin();
@@ -469,11 +569,21 @@ void setup() {
 }
 
 unsigned long lastModbusUpdate = 0;
+unsigned long lastMQTTPeriodicUpdate = 0;
 
 void loop() {
   ArduinoOTA.handle();
   server.handleClient();
   
+  reconnectMQTT();
+  mqttClient.loop();
+
+  // Periodisches MQTT-Sendelogik alle 300 Sekunden (5 Minuten)
+  if (millis() - lastMQTTPeriodicUpdate > 300000) {
+    publishAllMQTT();
+    lastMQTTPeriodicUpdate = millis();
+  }
+
   if (isSnifferMode) {
     handleSniffer();
   } else {
