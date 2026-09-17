@@ -20,13 +20,14 @@ const char* mqtt_client_id = "BWT_HeatPump"; // Feste MQTT Client-ID
 #define RX_PIN 2
 #define TX_PIN 3
 
-// --- Betriebsmodi der Wärmepumpe (Register 0x03E8) ---
+// --- Korrigierte Betriebsmodi der Wärmepumpe (Register 0x03E8) ---
 enum HeatPumpMode {
-    MODE_OFF   = 0,
-    MODE_ON    = 1,
-    MODE_SMART = 21,
-    MODE_BOOST = 22,
-    MODE_ECO   = 23
+    MODE_OFF        = 0,   // Aus
+    MODE_OFF_PRESET = 2,   // Zwischenschritt beim Ausschalten
+    MODE_AUTO       = 17,  // Auto (Heizen & Kühlen)
+    MODE_COOL       = 18,  // Kühlen
+    MODE_SMART      = 21,  // Smart Heizen
+    MODE_ECO        = 23   // Eco Heizen
 };
 
 WiFiClient espClient;
@@ -138,9 +139,10 @@ String decodeRegValue(uint16_t addr, uint16_t val) {
     }
     case 0x03E8: {
       if (val == MODE_OFF) valStr = String(val) + " (AUS)";
-      else if (val == MODE_ON) valStr = String(val) + " (EIN)";
+      else if (val == MODE_OFF_PRESET) valStr = String(val) + " (AUS PRESET)";
+      else if (val == MODE_AUTO) valStr = String(val) + " (AUTO)";
+      else if (val == MODE_COOL) valStr = String(val) + " (KÜHLEN)";
       else if (val == MODE_SMART) valStr = String(val) + " (SMART)";
-      else if (val == MODE_BOOST) valStr = String(val) + " (BOOST)";
       else if (val == MODE_ECO) valStr = String(val) + " (ECO)";
       else valStr = String(val);
       break;
@@ -191,9 +193,10 @@ void publishAllMQTT() {
   // Modus Klartext & Modus Wert
   String modeStr = "UNKNOWN";
   if (pwp.raw_mode == MODE_OFF) modeStr = "OFF";
-  else if (pwp.raw_mode == MODE_ON) modeStr = "ON";
+  else if (pwp.raw_mode == MODE_OFF_PRESET) modeStr = "OFF_PRESET";
+  else if (pwp.raw_mode == MODE_AUTO) modeStr = "AUTO";
+  else if (pwp.raw_mode == MODE_COOL) modeStr = "COOL";
   else if (pwp.raw_mode == MODE_SMART) modeStr = "SMART";
-  else if (pwp.raw_mode == MODE_BOOST) modeStr = "BOOST";
   else if (pwp.raw_mode == MODE_ECO) modeStr = "ECO";
   
   sendMQTT("mode", modeStr);
@@ -278,9 +281,10 @@ void updateCacheAndPwp(uint16_t addr, uint16_t val, bool &isChanged) {
         
         String modeStr = "UNKNOWN";
         if (pwp.raw_mode == MODE_OFF) modeStr = "OFF";
-        else if (pwp.raw_mode == MODE_ON) modeStr = "ON";
+        else if (pwp.raw_mode == MODE_OFF_PRESET) modeStr = "OFF_PRESET";
+        else if (pwp.raw_mode == MODE_AUTO) modeStr = "AUTO";
+        else if (pwp.raw_mode == MODE_COOL) modeStr = "COOL";
         else if (pwp.raw_mode == MODE_SMART) modeStr = "SMART";
-        else if (pwp.raw_mode == MODE_BOOST) modeStr = "BOOST";
         else if (pwp.raw_mode == MODE_ECO) modeStr = "ECO";
         sendMQTT("mode", modeStr);
       }
@@ -396,7 +400,7 @@ bool readSingleRegisterActive(uint16_t regAddr) {
 
 void updateActiveData() {
   const uint16_t regsToPoll[] = {
-    0x0200, 0x0201, 0x0203, 0x03E8, 0x03E9, 0x01FE, 0x0209, 0x020A, 0x0044, 0x01FB
+    0x0200, 0x0201, 0x0203, 0x03E8, 0x03E9, 0x01FE, 0x0209, 0x020A, 0x0044, 0x01FB, 0x01F4, 0x01F5, 0x01F7, 0x003B
   };
 
   int successCount = 0;
@@ -461,10 +465,17 @@ void handleRoot() {
   if (!isSnifferMode) {
     if (server.hasArg("setMode")) {
       uint16_t newMode = server.arg("setMode").toInt();
+      
+      // Falls ausgeschaltet werden soll, erst Preset-Wert 2 senden
+      if (newMode == MODE_OFF) {
+        writeRegFC10(0x03E8, MODE_OFF_PRESET);
+        delay(50);
+      }
+      
       uint8_t res = writeRegFC10(0x03E8, newMode);
       if (res == node.ku8MBSuccess) {
         pwp.raw_mode = newMode;
-        addLog("FC10 SUCCESS: Modus (0x03E8) -> " + String(newMode));
+        addLog("FC10 SUCCESS: Modus (0x03E8) -> " + decodeRegValue(0x03E8, newMode));
       } else {
         addLog("FC10 ERROR: Code 0x" + String(res, HEX));
       }
@@ -507,12 +518,12 @@ void handleRoot() {
     html += "<h3>Steuerung (Write via FC10)</h3>";
     html += "<p><b>Aktueller Modus (Reg 0x03E8):</b> " + decodeRegValue(0x03E8, pwp.raw_mode) + "</p>";
     
-    // Buttons für AUS, EIN, SMART, BOOST, ECO
+    // Buttons für AUS, AUTO, KÜHLEN, SMART, ECO
     html += "<p><b>Schnellwahl Modus:</b><br>";
     html += "<a href='/?setMode=" + String(MODE_OFF) + "'><button style='padding:8px 12px; background:#d9534f; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>AUS (0)</button></a> ";
-    html += "<a href='/?setMode=" + String(MODE_ON) + "'><button style='padding:8px 12px; background:#0275d8; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>EIN (1)</button></a> ";
-    html += "<a href='/?setMode=" + String(MODE_SMART) + "'><button style='padding:8px 12px; background:#5bc0de; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>SMART (21)</button></a> ";
-    html += "<a href='/?setMode=" + String(MODE_BOOST) + "'><button style='padding:8px 12px; background:#f0ad4e; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>BOOST (22)</button></a> ";
+    html += "<a href='/?setMode=" + String(MODE_AUTO) + "'><button style='padding:8px 12px; background:#0275d8; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>AUTO (17)</button></a> ";
+    html += "<a href='/?setMode=" + String(MODE_COOL) + "'><button style='padding:8px 12px; background:#5bc0de; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>KÜHLEN (18)</button></a> ";
+    html += "<a href='/?setMode=" + String(MODE_SMART) + "'><button style='padding:8px 12px; background:#f0ad4e; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>SMART (21)</button></a> ";
     html += "<a href='/?setMode=" + String(MODE_ECO) + "'><button style='padding:8px 12px; background:#5cb85c; color:white; border:none; border-radius:4px; cursor:pointer;'>ECO (23)</button></a></p>";
 
     html += "<form action='/' method='GET' style='margin-top:10px;'><b>Soll-Temperatur (0x03E9):</b> ";
@@ -578,7 +589,7 @@ void loop() {
   reconnectMQTT();
   mqttClient.loop();
 
-  // Periodisches MQTT-Sendelogik alle 300 Sekunden (5 Minuten)
+  // Periodische MQTT-Sendelogik alle 300 Sekunden (5 Minuten)
   if (millis() - lastMQTTPeriodicUpdate > 300000) {
     publishAllMQTT();
     lastMQTTPeriodicUpdate = millis();
