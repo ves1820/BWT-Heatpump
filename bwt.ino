@@ -20,13 +20,14 @@ const char* mqtt_client_id = "BWT_HeatPump"; // Feste MQTT Client-ID
 #define RX_PIN 2
 #define TX_PIN 3
 
-// --- Korrigierte Betriebsmodi der Wärmepumpe (Register 0x03E8) ---
+// --- Betriebsmodi der Wärmepumpe (Register 0x03E8) ---
 enum HeatPumpMode {
     MODE_OFF        = 0,   // Aus
     MODE_OFF_PRESET = 2,   // Zwischenschritt beim Ausschalten
     MODE_AUTO       = 17,  // Auto (Heizen & Kühlen)
     MODE_COOL       = 18,  // Kühlen
     MODE_SMART      = 21,  // Smart Heizen
+    MODE_BOOST      = 22,  // Boost Mode
     MODE_ECO        = 23   // Eco Heizen
 };
 
@@ -143,6 +144,7 @@ String decodeRegValue(uint16_t addr, uint16_t val) {
       else if (val == MODE_AUTO) valStr = String(val) + " (AUTO)";
       else if (val == MODE_COOL) valStr = String(val) + " (KÜHLEN)";
       else if (val == MODE_SMART) valStr = String(val) + " (SMART)";
+      else if (val == MODE_BOOST) valStr = String(val) + " (BOOST)";
       else if (val == MODE_ECO) valStr = String(val) + " (ECO)";
       else valStr = String(val);
       break;
@@ -197,6 +199,7 @@ void publishAllMQTT() {
   else if (pwp.raw_mode == MODE_AUTO) modeStr = "AUTO";
   else if (pwp.raw_mode == MODE_COOL) modeStr = "COOL";
   else if (pwp.raw_mode == MODE_SMART) modeStr = "SMART";
+  else if (pwp.raw_mode == MODE_BOOST) modeStr = "BOOST";
   else if (pwp.raw_mode == MODE_ECO) modeStr = "ECO";
   
   sendMQTT("mode", modeStr);
@@ -285,6 +288,7 @@ void updateCacheAndPwp(uint16_t addr, uint16_t val, bool &isChanged) {
         else if (pwp.raw_mode == MODE_AUTO) modeStr = "AUTO";
         else if (pwp.raw_mode == MODE_COOL) modeStr = "COOL";
         else if (pwp.raw_mode == MODE_SMART) modeStr = "SMART";
+        else if (pwp.raw_mode == MODE_BOOST) modeStr = "BOOST";
         else if (pwp.raw_mode == MODE_ECO) modeStr = "ECO";
         sendMQTT("mode", modeStr);
       }
@@ -465,20 +469,40 @@ void handleRoot() {
   if (!isSnifferMode) {
     if (server.hasArg("setMode")) {
       uint16_t newMode = server.arg("setMode").toInt();
+      uint16_t targetTempRaw = (uint16_t)(pwp.target_temp * 10.0);
       
-      // Falls ausgeschaltet werden soll, erst Preset-Wert 2 senden
+      // Step 1: Immer zuerst Soll-Temperatur setzen
+      writeRegFC10(0x03E9, targetTempRaw);
+      delay(50);
+
       if (newMode == MODE_OFF) {
+        // Step 2: Zwischenschritt Mode 2 (OFF PRESET)
         writeRegFC10(0x03E8, MODE_OFF_PRESET);
         delay(50);
-      }
-      
-      uint8_t res = writeRegFC10(0x03E8, newMode);
-      if (res == node.ku8MBSuccess) {
-        pwp.raw_mode = newMode;
-        addLog("FC10 SUCCESS: Modus (0x03E8) -> " + decodeRegValue(0x03E8, newMode));
+        
+        // Step 3: Endgültig AUS (0)
+        uint8_t res = writeRegFC10(0x03E8, MODE_OFF);
+        if (res == node.ku8MBSuccess) {
+          pwp.raw_mode = MODE_OFF;
+          addLog("FC10 SUCCESS: Modus -> AUS (0)");
+        } else {
+          addLog("FC10 ERROR (OFF): Code 0x" + String(res, HEX));
+        }
       } else {
-        addLog("FC10 ERROR: Code 0x" + String(res, HEX));
+        // Step 2: Zwischenschritt Mode 18 (KÜHLEN)
+        writeRegFC10(0x03E8, MODE_COOL);
+        delay(50);
+        
+        // Step 3: Gewählten Modus setzen (17, 18, 21, 22, 23)
+        uint8_t res = writeRegFC10(0x03E8, newMode);
+        if (res == node.ku8MBSuccess) {
+          pwp.raw_mode = newMode;
+          addLog("FC10 SUCCESS: Modus -> " + decodeRegValue(0x03E8, newMode));
+        } else {
+          addLog("FC10 ERROR (" + String(newMode) + "): Code 0x" + String(res, HEX));
+        }
       }
+
       server.sendHeader("Location", "/");
       server.send(303);
       return;
@@ -518,12 +542,13 @@ void handleRoot() {
     html += "<h3>Steuerung (Write via FC10)</h3>";
     html += "<p><b>Aktueller Modus (Reg 0x03E8):</b> " + decodeRegValue(0x03E8, pwp.raw_mode) + "</p>";
     
-    // Buttons für AUS, AUTO, KÜHLEN, SMART, ECO
+    // Buttons für AUS, AUTO, KÜHLEN, SMART, BOOST, ECO
     html += "<p><b>Schnellwahl Modus:</b><br>";
     html += "<a href='/?setMode=" + String(MODE_OFF) + "'><button style='padding:8px 12px; background:#d9534f; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>AUS (0)</button></a> ";
     html += "<a href='/?setMode=" + String(MODE_AUTO) + "'><button style='padding:8px 12px; background:#0275d8; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>AUTO (17)</button></a> ";
     html += "<a href='/?setMode=" + String(MODE_COOL) + "'><button style='padding:8px 12px; background:#5bc0de; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>KÜHLEN (18)</button></a> ";
     html += "<a href='/?setMode=" + String(MODE_SMART) + "'><button style='padding:8px 12px; background:#f0ad4e; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>SMART (21)</button></a> ";
+    html += "<a href='/?setMode=" + String(MODE_BOOST) + "'><button style='padding:8px 12px; background:#9c27b0; color:white; border:none; border-radius:4px; margin-right:4px; cursor:pointer;'>BOOST (22)</button></a> ";
     html += "<a href='/?setMode=" + String(MODE_ECO) + "'><button style='padding:8px 12px; background:#5cb85c; color:white; border:none; border-radius:4px; cursor:pointer;'>ECO (23)</button></a></p>";
 
     html += "<form action='/' method='GET' style='margin-top:10px;'><b>Soll-Temperatur (0x03E9):</b> ";
