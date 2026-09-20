@@ -59,7 +59,7 @@ Das System bietet zwei Betriebsmodi:
 
 | Hex | Dez | Skalierung / Typ | Einheit | Beschreibung & Werte |
 | :--- | :--- | :--- | :--- | :--- |
-| **`0x03E8`** | **1000** | uint16 | Enum | **Betriebsmodus / Power**<br>• `0` = AUS (Standby)<br>• `1` = EIN <br>• `21` (`0x15`) = **ECO**<br>• `23` (`0x17`) = **SMART**<br>• `22` (`0x16`) = **BOOST** |
+| **`0x03E8`** | **1000** | uint16 | Enum | **Betriebsmodus / Power**<br>• `0` = AUS (Standby)<br>• `18` = EIN <br>• `21` (`0x15`) = **ECO**<br>• `23` (`0x17`) = **SMART**<br>• `22` (`0x16`) = **BOOST** |
 | **`0x03E9`** | **1001** | Wert / 10.0 | °C | **Soll-Temperatur (Set Point)**<br>• z. B. `320` = **32,0 °C** (Einstellbereich: 15.0 – 35.0 °C) |
 
 ---
