@@ -7,14 +7,14 @@ Das System arbeitet als **Passiv-Sniffer / Modbus-Master**: Es liest den laufend
 ---
 
 ## Inhaltsverzeichnis
-- [Features](#-features)
-- [Hardware & Verkabelung](#-hardware--verkabelung)
-- [Modbus Register-Dokumentation](#-modbus-register-dokumentation)
-- [Software & Abhängigkeiten](#-software--abhängigkeiten)
-- [Inbetriebnahme & Flashen](#-inbetriebnahme--flashen)
-- [FHEM Integration](#-web-dashboard--bedienung)
-- [Anpassungen](Anpassungen)
-- [Beispiel Log](example--log)
+- [Features](#features)
+- [Hardware & Verkabelung](#hardware--verkabelung)
+- [Modbus Register-Dokumentation](#modbus-register-dokumentation)
+- [Software & Abhängigkeiten](#software--abhängigkeiten)
+- [Inbetriebnahme & Flashen](#inbetriebnahme--flashen)
+- [FHEM Integration](#fhem-integration)
+- [Anpassungen](#Anpassungen)
+- [Beispiel Log](#log)
 ---
 
 ## Features
@@ -162,7 +162,7 @@ attr WP_Waermepumpe stateFormat Mode: mode | Soll: target_temp °C | Status: pow
 
 ---
 
-## 🏡 FHEM Integration
+## FHEM Integration
 
 An- / Ausschalten
 ```
@@ -205,7 +205,7 @@ ArduinoOTA.setPassword("11111111");
 
 ---
 
-## example log
+## Log
 
 ```
 [SNIFF] 📥 READ Reg 0x0200 (Vorlauf) = 17,0 °C
