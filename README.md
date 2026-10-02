@@ -2,9 +2,7 @@
 
 Dieses Projekt ermöglicht das Auslesen und Steuern von **BWT** sowie **Fairland Inverter-Poolwärmepumpen** über die interne RS485 / Modbus RTU-Schnittstelle mittels eines **ESP32-C3**.
 
-Das System bietet zwei Betriebsmodi:
-1. **Sniffer-Modus (Passiv):** Liest den Datenverkehr zwischen dem originalen Tuya-WLAN-Modul und der Wärmepumpen-Elektronik mit, um Registeränderungen live im Web-Dashboard zu analysieren.
-2. **Active Master Modus (Aktive Steuerung):** Übernimmt die Steuerung der Wärmepumpe direkt über Modbus RTU (Slave ID 17, Funktion `FC 0x10`).
+Das System arbeitet als **Passiv-Sniffer / Modbus-Master**: Es liest den laufenden Datenverkehr zwischen dem originalen Tuya-Bedienteil (Master) und der Wärmepumpe (Slave `0x11`) mit und ermöglicht das zwischenschalten eigener Steuerbefehle direkt über Modbus RTU (Slave ID 17, Funktion `FC 0x10`).
 
 ---
 
@@ -14,18 +12,33 @@ Das System bietet zwei Betriebsmodi:
 - [Modbus Register-Dokumentation](#-modbus-register-dokumentation)
 - [Software & Abhängigkeiten](#-software--abhängigkeiten)
 - [Inbetriebnahme & Flashen](#-inbetriebnahme--flashen)
-- [Web-Dashboard & Bedienung](#-web-dashboard--bedienung)
-
+- [FHEM Integration](#-web-dashboard--bedienung)
+- [Anpassungen](Anpassungen)
+- [Beispiel Log](example--log)
 ---
 
 ## Features
 
-* **Duales System:** Umschaltung zwischen passivem Sniffer und aktivem Master per Web-Button.
-* **Erweiterter Delta-Filter:** Protokolliert im Sniffer-Modus gezielt Werteänderungen, um neue Modbus-Register schnell zu identifizieren.
-* **Volle Sensorüberwachung:** Vorlauf, Rücklauf, Außentemperatur, Kompressorfrequenz, Kältemittel-, Verdampfer- und Heißgastemperatur.
-* **Steuerung via Modbus Write (`FC 0x10`):** Zuverlässiges Ein-/Ausschalten, Moduswechsel (SMART / ECO) und Soll-Temperaturanpassung.
+* **Passive Modbus-Sniffer Engine:**
+  * Liest alle Modbus-Frames (Read FC03 / Write FC10) in Echtzeit mit.
+  * Dynamisches Inter-Byte-Timeout (3 ms) und 1024-Byte Ringpuffer für saubere Paket-Trennung ohne Datenverlust.
+  * Erkennt Modbus-Register-Änderungen sofort und spiegelt sie auf MQTT.
+* **Hybrider Master-Modus (Steuerung):**
+  * Ein-/Ausschalten (`power`)
+  * Betriebsmodus ändern (`mode`: `ECO`, `SMART`, `BOOST`)
+  * Soll-Temperatur einstellen (`target_temp`: 28.0 – 35.0 °C)
+  * Manuelle Abfrage auslösen (`poll`)
+* **Echtzeit Web-Interface (3 Views):**
+  * **Desktop Dashboard & Mobile Remote:** Übersichtliche Steuerung für Smartphone und PC.
+  * **Advanced Diagnostics:** Detaillierte Systemwerte, Heap-Speicher, Signalstärke & Register.
+  * **Live Log Console:**
+    * Zeitstempel im Format `[HH:MM]` via NTP (automatische Sommer-/Winterzeit).
+    * Filterbar nach `ALL`, `HUMAN` (Klartext) und `RAW` (Hex-Dump).
+    * Konfigurierbarer Zeilenpuffer (Standard: 500 Zeilen, persistente Einstellungen via Browser-`localStorage`).
+* **MQTT & Smart Home Integration:**
+  * Vollständig kompatibel mit **FHEM** (`MQTT2_DEVICE`), **Home Assistant**, **ioBroker** und **OpenHAB**.
+  * Automatische Status-Updates bei Register-Änderungen.    
 * **OTA-Updates (Over-The-Air):** Drahtlose Updates über WLAN, geschützt mit Passwort (`11111111`).
-* **Responsive Web-Dashboard:** Live-Protokollierung via AJAX ohne Seiten-Reload.
 
 ---
 
@@ -119,13 +132,84 @@ Nach dem ersten USB-Flash kannst du zukünftige Updates drahtlos über das Netzw
 
 ---
 
-## 🌐 Web-Dashboard & Bedienung
+## 🏡 FHEM Integration
 
-Rufe im Browser die IP-Adresse des ESP32 auf (z. B. `http://192.168.0.37`):
+Zur Anbindung in FHEM erstelle ein neues `MQTT2_DEVICE` und verknüpfe es mit deinem bestehenden `MQTT2_CLIENT` (Ersetze `DEIN_MQTT_CLIENT_NAME` durch den Namen deines MQTT-IO-Devices):
 
-1. **Sniffer Modus:**
-   * Klicke auf **„NUR Änderungen (Delta)“**, um die Konsole übersichtlich zu halten. Sobald am Display oder in der Tuya-App Werte geändert werden, wird die genaue Registeradresse mit Hex- und Dezimalwert geloggt.
-2. **Active Master Modus:**
-   * Nach dem Abziehen des Tuya-Moduls schaltest du im Web-Dashboard auf **ACTIVE MASTER** um.
-   * Sämtliche Sensoren werden in einer übersichtlichen Tabelle dargestellt.
-   * Über die Steuerungsschaltflächen können die Betriebsmodi (*AUS*, *SMART*, *ECO/BOOST*) sowie die Soll-Temperatur direkt über Modbus `FC 0x10` gesetzt werden.
+defmod WP_Waermepumpe MQTT2_DEVICE
+attr WP_Waermepumpe IODev DEIN_MQTT_CLIENT_NAME
+
+attr WP_Waermepumpe setList \
+  power:ON,OFF heatpump/set/power $EVTPART1\
+  mode:ECO,SMART,BOOST heatpump/set/mode $EVTPART1\
+  target_temp:slider,15.0,0.5,35.0,1 heatpump/set/target_temp $EVTPART1\
+  poll:noArg heatpump/set/poll 1
+
+attr WP_Waermepumpe readingList \
+  heatpump/status:.* status\
+  heatpump/power:.* power\
+  heatpump/mode:.* mode\
+  heatpump/target_temp:.* target_temp\
+  heatpump/water_in_temp:.* water_in_temp\
+  heatpump/water_out_temp:.* water_out_temp\
+  heatpump/outdoor_temp:.* outdoor_temp\
+  heatpump/compressor_freq:.* compressor_freq
+
+attr WP_Waermepumpe webCmd power:mode:target_temp:poll
+attr WP_Waermepumpe webCmdLabel Power:Modus:Soll-Temp:Abfrage
+attr WP_Waermepumpe widgetOverride target_temp:slider,15.0,0.5,35.0,1
+attr WP_Waermepumpe stateFormat Mode: mode | Soll: target_temp °C | Status: power
+
+---
+
+## 🏡 FHEM Integration
+
+An- / Ausschalten
+```
+set DEIN_MQTT_CLIENT_NAME publish heatpump/set/power ON
+```
+
+Soll-Temperatur ändern (z. B. 28.5 °C)
+```
+set DEIN_MQTT_CLIENT_NAME publish heatpump/set/target_temp 28.5
+```
+
+Modus ändern (OFF, AUTO, COOL, SMART, BOOST, ECO)
+```
+set DEIN_MQTT_CLIENT_NAME publish heatpump/set/mode SMART
+```
+
+Manuelle Register-Abfrage auslösen
+```
+set DEIN_MQTT_CLIENT_NAME publish heatpump/set/poll 1
+```
+
+---
+
+
+## Anpassungen
+
+```
+// Log-Speicher & Puffer
+const int MAX_LOG_LINES = 1000;     // Anzahl Zeilen im Web-Log (ca. 80-150 KB RAM)
+#define FRAME_TIMEOUT_MS 3          // Inter-Byte Timeout für 9600 Baud Modbus
+
+// WLAN & MQTT
+const char* ssid = "DEIN_WLAN_SSID";
+const char* password = "DEIN_WLAN_PASSWORT";
+const char* mqtt_server = "192.168.1.X";
+
+// Setup
+ArduinoOTA.setPassword("11111111");
+```
+
+---
+
+## example log
+
+```
+[SNIFF] 📥 READ Reg 0x0200 (Vorlauf) = 17,0 °C
+[SNIFF] 📥 READ Reg 0x0203 (Außen) = 16,5 °C
+[SNIFF] ✍️ WRITE FC10 | Reg 0x03E9 (Soll-Temp) = 28,0 °C (0x0118)
+📥 MQTT Empfangen [heatpump/set/target_temp]: 28.5
+```
