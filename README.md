@@ -2,6 +2,8 @@
 
 Dieses Projekt ermöglicht das Auslesen und Steuern von **BWT** sowie **Fairland Inverter-Poolwärmepumpen** über die interne RS485 / Modbus RTU-Schnittstelle mittels eines **ESP32-C3**.
 
+Dieses Projekt wurde nötig weil das orginale App und das WLAN Modul des Herstellers ist nicht zuverlässig arbeiten, es reagiert teils gar nicht - liefert nicht nachvollziehbare WLAN Fehler - Cloud Server ist nicht erreichbar ... Das hier ist also mein Plan B.
+
 Das System arbeitet als **Passiv-Sniffer / Modbus-Master**: Es liest den laufenden Datenverkehr zwischen dem originalen Tuya-Bedienteil (Master) und der Wärmepumpe (Slave `0x11`) mit und ermöglicht das zwischenschalten eigener Steuerbefehle direkt über Modbus RTU (Slave ID 17, Funktion `FC 0x10`).
 
 ---
@@ -13,7 +15,7 @@ Das System arbeitet als **Passiv-Sniffer / Modbus-Master**: Es liest den laufend
 - [Software & Abhängigkeiten](#software--abhängigkeiten)
 - [Inbetriebnahme & Flashen](#inbetriebnahme--flashen)
 - [FHEM Integration](#fhem-integration)
-- [Anpassungen](#Anpassungen)
+- [Anpassungen](#anpassungen)
 - [Beispiel Log](#log)
 ---
 
@@ -62,7 +64,7 @@ Das System arbeitet als **Passiv-Sniffer / Modbus-Master**: Es liest den laufend
 * **RS485 `A` (D+)** → Klemme `A` an der Wärmepumpen-Platine / Tuya-Stecker
 * **RS485 `B` (D-)** → Klemme `B` an der Wärmepumpen-Platine / Tuya-Stecker
 
-> **Hinweis zum Active Master Modus:** Um Konflikte auf dem Modbus-Bus zu vermeiden, sollte das originale Tuya-WLAN-Modul abgezogen werden, wenn der ESP32 als *Active Master* agiert.
+> **Hinweis zum Active Master:** Das originale Tuya-WLAN-Modul agiert weiterhin als Active Master. Unser ESP32 ist via Zwischenstecker als "Man in the Middle" geschaltet und liest alle Befehle mit und verhält sich selbst ruhig - kann aber auf Anforderung hin auch selbet Befehle senden (Register Poll / Modus setzen ...). 
 
 ---
 
@@ -174,7 +176,7 @@ Soll-Temperatur ändern (z. B. 28.5 °C)
 set DEIN_MQTT_CLIENT_NAME publish heatpump/set/target_temp 28.5
 ```
 
-Modus ändern (OFF, AUTO, COOL, SMART, BOOST, ECO)
+Modus ändern (ECO, SMART, BOOST)
 ```
 set DEIN_MQTT_CLIENT_NAME publish heatpump/set/mode SMART
 ```
