@@ -308,8 +308,8 @@ void updateCacheAndPwp(uint16_t addr, uint16_t val, bool &isChanged) {
 }
 
 // --- PASSIVER MODBUS TUYA SNIFFER (FUNKTIONALER CORE) ---
-#define FRAME_TIMEOUT 6 
-uint8_t snifferFrame[256];
+#define FRAME_TIMEOUT 3 
+uint8_t snifferFrame[1024];
 uint16_t frameLen = 0;
 unsigned long lastByteTime = 0;
 uint16_t pendingReqAddr = 0xFFFF;
@@ -380,9 +380,12 @@ void processSnifferFrame(uint8_t* buf, uint16_t len) {
 
 void handleSniffer() {
   while (ModbusSerial.available()) {
-    snifferFrame[frameLen++] = ModbusSerial.read();
+    if (frameLen < 1024) {
+      snifferFrame[frameLen++] = ModbusSerial.read();
+    } else {
+      ModbusSerial.read(); // Verwerfen, falls Puffer voll
+    }
     lastByteTime = millis();
-    if (frameLen >= 256) frameLen = 255;
   }
   
   if (frameLen > 0 && (millis() - lastByteTime >= FRAME_TIMEOUT)) {
