@@ -134,10 +134,11 @@ Nach dem ersten USB-Flash kannst du zukünftige Updates drahtlos über das Netzw
 
 ---
 
-## 🏡 FHEM Integration
+## FHEM Integration
 
 Zur Anbindung in FHEM erstelle ein neues `MQTT2_DEVICE` und verknüpfe es mit deinem bestehenden `MQTT2_CLIENT` (Ersetze `DEIN_MQTT_CLIENT_NAME` durch den Namen deines MQTT-IO-Devices):
 
+```
 defmod WP_Waermepumpe MQTT2_DEVICE
 attr WP_Waermepumpe IODev DEIN_MQTT_CLIENT_NAME
 
@@ -161,27 +162,25 @@ attr WP_Waermepumpe webCmd power:mode:target_temp:poll
 attr WP_Waermepumpe webCmdLabel Power:Modus:Soll-Temp:Abfrage
 attr WP_Waermepumpe widgetOverride target_temp:slider,15.0,0.5,35.0,1
 attr WP_Waermepumpe stateFormat Mode: mode | Soll: target_temp °C | Status: power
+```
 
----
 
-## FHEM Integration
-
-An- / Ausschalten
+An- / Ausschalten:
 ```
 set DEIN_MQTT_CLIENT_NAME publish heatpump/set/power ON
 ```
 
-Soll-Temperatur ändern (z. B. 28.5 °C)
+Soll-Temperatur ändern (z. B. 28.5 °C):
 ```
 set DEIN_MQTT_CLIENT_NAME publish heatpump/set/target_temp 28.5
 ```
 
-Modus ändern (ECO, SMART, BOOST)
+Modus ändern (ECO, SMART, BOOST):
 ```
 set DEIN_MQTT_CLIENT_NAME publish heatpump/set/mode SMART
 ```
 
-Manuelle Register-Abfrage auslösen
+Manuelle Register-Abfrage auslösen:
 ```
 set DEIN_MQTT_CLIENT_NAME publish heatpump/set/poll 1
 ```
