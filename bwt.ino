@@ -2,6 +2,7 @@
 #include <WebServer.h>
 #include <ModbusMaster.h>
 #include <ArduinoOTA.h>
+#include <Update.h>
 #include <PubSubClient.h>
 
 // --- WLAN Konfiguration ---
@@ -38,8 +39,8 @@ WebServer server(80);
 ModbusMaster node;
 HardwareSerial ModbusSerial(1);
 
-// --- Web-Logger (100 Zeilen Ringpuffer) ---
-const int MAX_LOG_LINES = 500;
+// --- Web-Logger (500 Zeilen Ringpuffer) ---
+const int MAX_LOG_LINES = 300;
 String logBuffer[MAX_LOG_LINES];
 int logIndex = 0;
 
@@ -204,6 +205,7 @@ void publishAllMQTT() {
   
   sendMQTT("status", "online");
   sendMQTT("ip", WiFi.localIP().toString());
+  sendMQTT("free_heap", String(ESP.getFreeHeap())); // RAM via MQTT
   sendMQTT("power", (pwp.raw_mode == MODE_OFF) ? "OFF" : "ON");
   
   String modeStr = "UNKNOWN";
@@ -307,7 +309,7 @@ void updateCacheAndPwp(uint16_t addr, uint16_t val, bool &isChanged) {
   }
 }
 
-// --- PASSIVER MODBUS TUYA SNIFFER (FUNKTIONALER CORE) ---
+// --- PASSIVER MODBUS TUYA SNIFFER ---
 #define FRAME_TIMEOUT 3 
 uint8_t snifferFrame[1024];
 uint16_t frameLen = 0;
@@ -317,10 +319,8 @@ String pendingReqStr = "";
 bool deltaOnlyMode = false;
 
 void processSnifferFrame(uint8_t* buf, uint16_t len) {
-  // 0. Immer RAW Hex-Frame protokollieren
   addLog("[RAW] " + bufferToHex(buf, len));
 
-  // 1. FC 0x10 (Write Befehl)
   if (buf[0] == 0x11 && buf[1] == 0x10 && len >= 9) {
     uint16_t writeAddr = (buf[2] << 8) | buf[3];
     uint16_t writeVal  = (buf[7] << 8) | buf[8];
@@ -332,7 +332,6 @@ void processSnifferFrame(uint8_t* buf, uint16_t len) {
     return;
   }
 
-  // 2. FC 0x03 Request (8 Bytes vom Tuya Master)
   if (buf[0] == 0x11 && buf[1] == 0x03 && len == 8) {
     if (pendingReqAddr != 0xFFFF && !deltaOnlyMode) {
       addLog("[SNIFF] " + pendingReqStr + " Reg " + hex4(pendingReqAddr) + " (" + getRegisterName(pendingReqAddr) + ") [KEINE ANTWORT]");
@@ -342,7 +341,6 @@ void processSnifferFrame(uint8_t* buf, uint16_t len) {
     return;
   }
   
-  // 3. FC 0x03 Response (Antwort der Wärmepumpe)
   if (buf[0] == 0x11 && buf[1] == 0x03 && len >= 5) {
     uint8_t byteCount = buf[2];
     uint16_t startAddr = (pendingReqAddr != 0xFFFF) ? pendingReqAddr : 0x0000;
@@ -383,7 +381,7 @@ void handleSniffer() {
     if (frameLen < 1024) {
       snifferFrame[frameLen++] = ModbusSerial.read();
     } else {
-      ModbusSerial.read(); // Verwerfen, falls Puffer voll
+      ModbusSerial.read();
     }
     lastByteTime = millis();
   }
@@ -558,6 +556,14 @@ void updateActiveData() {
   }
 }
 
+// --- HTTP Reset Endpoint (/reset) ---
+void handleResetEndpoint() {
+  addLog(">>> ESP32 REBOOT AUSGEFÜHRT VIA /reset <<<");
+  server.send(200, "text/html", "<html><head><meta charset='utf-8'></head><body style='font-family:sans-serif; text-align:center; padding-top:50px;'><h3>ESP32 wird neu gestartet (/reset)...</h3><p>Automatische Weiterleitung in 8 Sekunden.</p><script>setTimeout(function(){ window.location.href='/'; }, 8000);</script></body></html>");
+  delay(1000);
+  ESP.restart();
+}
+
 // --- Webserver Endpunkte ---
 void handleLogs() {
   String out = "";
@@ -577,10 +583,7 @@ void handleRoot() {
   }
 
   if (server.hasArg("reboot")) {
-    addLog(">>> ESP32 NEUSTART WIRD AUSGEFÜHRT <<<");
-    server.send(200, "text/html", "<html><head><meta charset='utf-8'></head><body style='font-family:sans-serif; text-align:center; padding-top:50px;'><h3>ESP32 wird neu gestartet...</h3><p>Automatische Weiterleitung in 8 Sekunden.</p><script>setTimeout(function(){ window.location.href='/'; }, 8000);</script></body></html>");
-    delay(1000);
-    ESP.restart();
+    handleResetEndpoint();
     return;
   }
 
@@ -610,6 +613,7 @@ void handleRoot() {
   html += ".header { background:#1e293b; color:white; padding:15px 20px; border-radius:10px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px; }";
   html += ".header h1 { margin:0; font-size:1.4rem; }";
   html += ".badge { background:#10b981; color:white; padding:4px 8px; border-radius:4px; font-size:0.8rem; font-weight:bold; }";
+  html += ".badge-ram { background:#8b5cf6; color:white; padding:4px 8px; border-radius:4px; font-size:0.8rem; font-weight:bold; }";
   html += ".nav-tabs { display:flex; gap:8px; margin-bottom:15px; border-bottom:2px solid var(--border); padding-bottom:8px; }";
   html += ".tab-btn { padding:10px 18px; border:none; background:#e2e8f0; color:#475569; font-weight:bold; border-radius:6px; cursor:pointer; font-size:0.95rem; }";
   html += ".tab-btn.active { background:var(--primary); color:white; }";
@@ -633,7 +637,8 @@ void handleRoot() {
   
   html += "<div class='header'>";
   html += "<div><h1>BWT Heatpump Controller</h1><small>Mode: SNIFFER & MASTER | IP: " + WiFi.localIP().toString() + "</small></div>";
-  html += "<div><span class='badge'>MQTT: " + String(mqttClient.connected() ? "CONNECTED" : "DISCONNECTED") + "</span> ";
+  html += "<div><span class='badge-ram'>RAM: " + String(ESP.getFreeHeap() / 1024) + " KB free</span> ";
+  html += "<span class='badge'>MQTT: " + String(mqttClient.connected() ? "CONNECTED" : "DISCONNECTED") + "</span> ";
   html += "<a href='/?refresh=1' class='btn btn-poll'>🔄 Manual Poll</a></div>";
   html += "</div>";
 
@@ -716,6 +721,17 @@ void handleRoot() {
   // --- TAB 3: ADVANCED DIAGNOSTICS UI ---
   html += "<div id='diag' class='tab-content'>";
   html += "<div class='card'>";
+  html += "<h3>System & Speicher Status</h3>";
+  html += "<p>🧠 <b>Freier RAM (Heap):</b> " + String(ESP.getFreeHeap() / 1024.0, 2) + " KB (" + String(ESP.getFreeHeap()) + " Bytes)</p>";
+  html += "<p>📉 <b>Minimaler freier RAM:</b> " + String(ESP.getMinFreeHeap() / 1024.0, 2) + " KB</p>";
+  html += "<p>📦 <b>Gesamt Heap-Größe:</b> " + String(ESP.getHeapSize() / 1024.0, 2) + " KB</p>";
+  
+  html += "<div style='margin-top:15px; display:flex; gap:10px; flex-wrap:wrap;'>";
+  html += "<a href='/update' class='btn btn-poll'>📁 Firmware Web-OTA Upload</a>";
+  html += "<a href='/reset' onclick='return confirm(\"ESP32 wirklich via /reset neu starten?\");' class='btn btn-danger'>ESP32 Reboot (/reset)</a>";
+  html += "</div></div>";
+
+  html += "<div class='card'>";
   html += "<h3>Register-Tabelle</h3>";
   
   const uint16_t displayRegs[] = {
@@ -734,11 +750,7 @@ void handleRoot() {
     String valDisplay = found ? decodeRegValue(a, v) : "--- (Nicht gelesen)";
     html += "<tr><td>" + hex4(a) + " (" + String(a) + ")</td><td>" + getRegisterName(a) + "</td><td><b>" + valDisplay + "</b></td></tr>";
   }
-  html += "</table>";
-  
-  html += "<div style='margin-top:15px;'>";
-  html += "<a href='/?reboot=1' onclick='return confirm(\"ESP32 neu starten?\");' class='btn btn-danger'>ESP32 Reboot</a>";
-  html += "</div></div>";
+  html += "</table></div>";
 
   html += "<div class='card'>";
   html += "<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;'>";
@@ -755,7 +767,7 @@ void handleRoot() {
 
   html += "</div>";
 
-  // JavaScript für Tab- & Log-Persistenz über localStorage
+  // JavaScript
   html += "<script>";
   html += "let rawLogData = '';";
   html += "let currentFilter = localStorage.getItem('logFilter') || 'ALL';";
@@ -824,15 +836,59 @@ void setup() {
 
   mqttClient.setServer(mqtt_server, mqtt_port);
 
+  // 1. ArduinoOTA (IDE Flash)
   ArduinoOTA.setHostname("bwt-heatpump-esp32");
   ArduinoOTA.setPassword("11111111");
   ArduinoOTA.begin();
 
+// 2. HTTP Web-OTA Upload (/update) - Eigene Implementierung ohne FileSystem
+  server.on("/update", HTTP_GET, []() {
+    String html = "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'>";
+    html += "<style>body{font-family:sans-serif;padding:20px;background:#f4f6f9;color:#333;}</style></head><body>";
+    html += "<h2>BWT Heatpump - Firmware Update (.bin)</h2>";
+    html += "<p>Wähle deine kompilierte Firmware-Datei aus:</p>";
+    html += "<form method='POST' action='/update' enctype='multipart/form-data'>";
+    html += "<input type='file' name='update' accept='.bin' required><br><br>";
+    html += "<input type='submit' value='Firmware hochladen' style='padding:8px 16px; background:#0275d8; color:white; border:none; border-radius:4px; cursor:pointer;'>";
+    html += "</form>";
+    html += "<br><a href='/'>&larr; Zurück zum Dashboard</a>";
+    html += "</body></html>";
+    server.send(200, "text/html", html);
+  });
+
+  server.on("/update", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "Update fehlgeschlagen!" : "Update erfolgreich! ESP32 startet neu...");
+    delay(1000);
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      addLog("📦 OTA-Start: " + String(upload.filename.c_str()));
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) { // Erzwangenes Firmware-Flash (U_FLASH)
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        addLog("✅ OTA-Update erfolgreich: " + String(upload.totalSize) + " Bytes");
+      } else {
+        Update.printError(Serial);
+      }
+    }
+  });
+
+  // 3. Webserver Endpunkte
   server.on("/", handleRoot);
+  server.on("/reset", handleResetEndpoint); // Reset-Endpunkt: http://x.x.x.x/reset
   server.on("/logdata", handleLogs); 
   server.begin();
   
   addLog("System gestartet (Sniffer + Hybrid Master). IP: " + WiFi.localIP().toString());
+  addLog("Freier Heap: " + String(ESP.getFreeHeap() / 1024.0, 1) + " KB");
 }
 
 unsigned long lastMQTTPeriodicUpdate = 0;
